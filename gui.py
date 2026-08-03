@@ -4,9 +4,11 @@ import contextlib
 import io
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
+import webbrowser
 from pathlib import Path
 
 # 패키징(exe)된 Playwright 가 번들 내부에서 브라우저를 찾지 않도록 표준 경로로 고정.
@@ -30,6 +32,30 @@ if "--selftest" in sys.argv:
     sys.exit(0)
 
 APP_NAME = "MapleUtil"
+APP_VERSION = "1.0"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그(v1.1)를 만든다
+REPO = "Chen3301/maple-util"
+RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
+
+
+def parse_ver(s):
+    """'v1.2.3' -> (1, 2, 3) — 비교용"""
+    nums = re.findall(r"\d+", s or "")
+    return tuple(int(n) for n in nums[:4]) or (0,)
+
+
+def fetch_latest_version(timeout=6):
+    """GitHub 최신 릴리스 태그를 조회 (실패하면 None — 조용히 넘어간다)"""
+    try:
+        import json as _json
+        import urllib.request
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return (_json.loads(r.read().decode("utf-8")) or {}).get("tag_name")
+    except Exception:
+        return None
 
 # 팔레트
 BG = "#0f1117"
@@ -155,7 +181,20 @@ class App:
         self._build(root)
         self._sync_auto()
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._check_update, daemon=True).start()
         self.root.after(120, self.drain)
+
+    def _check_update(self):
+        """시작할 때 최신 릴리스를 조회해 새 버전이면 알림 띠를 띄운다"""
+        tag = fetch_latest_version()
+        if not tag or parse_ver(tag) <= parse_ver(APP_VERSION):
+            return
+        self.root.after(0, lambda: self._show_update(tag))
+
+    def _show_update(self, tag):
+        self.update_lbl.configure(
+            text=f"새 버전 {tag} 이 나왔습니다  (현재 v{APP_VERSION})")
+        self.update_bar.pack(fill="x", after=self.header)
 
     # ---------- 스타일 ----------
 
@@ -196,9 +235,22 @@ class App:
     # ---------- 화면 ----------
 
     def _build(self, root):
-        header = GradientHeader(root, APP_NAME, "경매장 매물 → 환산주스탯 자동 등록",
-                                GRAD1, GRAD2, avatar=self.avatar)
-        header.pack(fill="x")
+        self.header = GradientHeader(root, f"{APP_NAME}  v{APP_VERSION}",
+                                     "경매장 매물 → 환산주스탯 자동 등록",
+                                     GRAD1, GRAD2, avatar=self.avatar)
+        self.header.pack(fill="x")
+
+        # 새 버전 알림 (있을 때만 보인다)
+        self.update_bar = tk.Frame(root, bg="#2b2419")
+        self.update_lbl = tk.Label(self.update_bar, text="", bg="#2b2419", fg="#ffca7a",
+                                   font=("Malgun Gothic", 9, "bold"))
+        self.update_lbl.pack(side="left", padx=(18, 12), pady=9)
+        tk.Label(self.update_bar, text="다운로드 페이지 열기", bg="#2b2419", fg=ACCENT,
+                 cursor="hand2", font=("Malgun Gothic", 9, "underline")
+                 ).pack(side="left", pady=9)
+        for w in self.update_bar.winfo_children():
+            w.bind("<Button-1>", lambda e: webbrowser.open(RELEASE_PAGE))
+        self.update_bar.bind("<Button-1>", lambda e: webbrowser.open(RELEASE_PAGE))
 
         outer = tk.Frame(root, bg=BG, padx=18, pady=16)
         outer.pack(fill="both", expand=True)
