@@ -101,15 +101,18 @@ class Toggle(tk.Frame):
         self.command = command
         self.on_color, self.off_color = on_color, off_color
         self.fg, self.muted = fg, muted
-        w, h, pad = 38, 21, 2      # 얇고 낮은 비율이 더 정돈돼 보인다
+        # 꺼짐: 테두리만 / 켜짐: 채워짐 — 상태 차이가 한눈에 보이도록
+        w, h, pad = 40, 22, 3
         self.w, self.h, self.pad = w, h, pad
-        self.cv = tk.Canvas(self, width=w, height=h, bd=0, highlightthickness=0,
+        self.track_bg = bg
+        self.cv = tk.Canvas(self, width=w + 2, height=h + 2, bd=0, highlightthickness=0,
                             bg=bg, cursor="hand2")
         self.cv.pack(side="left")
-        self.track = round_rect(self.cv, 0, 0, w, h, h / 2, fill=off_color, outline="")
+        self.track = round_rect(self.cv, 1, 1, w + 1, h + 1, h / 2,
+                                fill=bg, outline=off_color, width=2)
         d = h - pad * 2
-        self.knob = self.cv.create_oval(pad, pad, pad + d, pad + d,
-                                        fill="#ffffff", outline="")
+        self.knob = self.cv.create_oval(pad + 1, pad + 1, pad + 1 + d, pad + 1 + d,
+                                        fill=off_color, outline="")
         self.lbl = tk.Label(self, text=text, bg=bg, fg=fg, cursor="hand2",
                             font=("Malgun Gothic", 9))
         self.lbl.pack(side="left", padx=(10, 0))
@@ -139,12 +142,15 @@ class Toggle(tk.Frame):
         self._render()
 
     def _render(self):
-        h, w, pad = self.h, self.w, self.pad
+        h, w, pad, t = self.h, self.w, self.pad, self._pos
         d = h - pad * 2
-        x = pad + self._pos * (w - h)      # 손잡이 이동 거리
-        self.cv.coords(self.knob, x, pad, x + d, pad + d)
-        self.cv.itemconfigure(self.track, fill=lerp(self.off_color, self.on_color, self._pos))
-        self.lbl.configure(fg=self.fg if self._pos > 0.5 else self.muted)
+        x = pad + 1 + t * (w - h)          # 손잡이 이동 거리
+        self.cv.coords(self.knob, x, pad + 1, x + d, pad + 1 + d)
+        self.cv.itemconfigure(self.track,
+                              fill=lerp(self.track_bg, self.on_color, t),
+                              outline=lerp(self.off_color, self.on_color, t))
+        self.cv.itemconfigure(self.knob, fill=lerp(self.off_color, "#ffffff", t))
+        self.lbl.configure(fg=self.fg if t > 0.5 else self.muted)
 
 
 class Dropdown(tk.Canvas):
@@ -238,7 +244,7 @@ class Dropdown(tk.Canvas):
 class GradientHeader(tk.Canvas):
     """좌우 그라데이션 헤더 (아바타 + 제목)"""
 
-    def __init__(self, parent, title, subtitle, c1, c2, avatar=None, height=78):
+    def __init__(self, parent, title, subtitle, c1, c2, avatar=None, height=92):
         super().__init__(parent, height=height, bd=0, highlightthickness=0, bg=c1)
         self.c1, self.c2 = c1, c2
         self.title, self.subtitle, self.avatar = title, subtitle, avatar

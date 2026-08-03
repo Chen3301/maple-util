@@ -33,7 +33,7 @@ if "--selftest" in sys.argv:
     sys.exit(0)
 
 APP_NAME = "MapleUtil"
-APP_VERSION = "1.1"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그를 만든다
+APP_VERSION = "1.2"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그를 만든다
 REPO = "Chen3301/maple-util"
 RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
 
@@ -225,13 +225,18 @@ class App:
         threading.Thread(target=self._check_update, daemon=True).start()
         self.root.after(120, self.drain)
 
-    def _load_avatar(self, path, box=52):
+    def _load_avatar(self, path, box=68):
+        """헤더에 넣을 크기로 맞춘다 (작으면 확대, 크면 축소)"""
         if not path:
             return None
         try:
             img = tk.PhotoImage(file=path)
-            f = max(1, max(img.width(), img.height()) // box)
-            return img.subsample(f)
+            side = max(img.width(), img.height())
+            if side > box:
+                return img.subsample(max(1, round(side / box)))
+            if side and side * 2 <= box:      # 너무 작으면 정수배로 확대
+                return img.zoom(max(1, box // side))
+            return img
         except Exception:
             return None
 
@@ -361,12 +366,20 @@ class App:
                  font=("Malgun Gothic", 9)).pack(side="left", padx=(26, 0))
         mk_drop(r2, self.label_var, ["번호", "가격"], 90).pack(side="left", padx=10)
 
-        mk_toggle(c2, "보스컷 [스펙업 순서 등록]까지 자동으로",
-                  self.specup_var).pack(anchor="w", pady=(14, 0))
-        mk_toggle(c2, "연속 모드 — 검색할 때마다 계속 등록",
-                  self.loop_var).pack(anchor="w", pady=(8, 0))
-        mk_toggle(c2, "작업이 끝나면 알림음", self.sound_var).pack(anchor="w", pady=(8, 0))
-        mk_toggle(c2, "다크 모드", self.dark_var, self.toggle_theme).pack(anchor="w", pady=(8, 0))
+        # 토글은 2열로 나눠 배치 (세로로 길게 늘어지지 않도록)
+        grid = tk.Frame(c2, bg=CARD)
+        grid.pack(fill="x", pady=(14, 0))
+        grid.grid_columnconfigure(0, weight=1, uniform="tg")
+        grid.grid_columnconfigure(1, weight=1, uniform="tg")
+        toggles = [
+            ("보스컷 [스펙업 순서 등록]까지 자동으로", self.specup_var, None),
+            ("연속 모드 — 검색할 때마다 계속 등록", self.loop_var, None),
+            ("작업이 끝나면 알림음", self.sound_var, None),
+            ("다크 모드", self.dark_var, self.toggle_theme),
+        ]
+        for i, (text, var, cmd) in enumerate(toggles):
+            mk_toggle(grid, text, var, cmd).grid(
+                row=i // 2, column=i % 2, sticky="w", pady=(0 if i < 2 else 9, 0))
 
         # 버튼
         btns = tk.Frame(outer, bg=BG)
@@ -467,25 +480,10 @@ class App:
         self.root.after(120, self.drain)
 
     def _maybe_swap_avatar(self, line):
-        """경매장에서 캐릭터 이미지를 확인하면 헤더 아바타를 그 캐릭터로 바꾼다"""
+        """경매장에서 캐릭터 그림을 받아오면 헤더 아바타를 그 캐릭터로 바꾼다"""
         if not line.startswith("캐릭터이미지: "):
             return
-        url = line[len("캐릭터이미지: "):].strip()
-        threading.Thread(target=self._download_avatar, args=(url,), daemon=True).start()
-
-    def _download_avatar(self, url):
-        try:
-            import urllib.request
-            dest = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MapleAuctionUtil"
-            dest.mkdir(parents=True, exist_ok=True)
-            path = dest / "char_avatar.png"
-            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = r.read()
-            path.write_bytes(data)
-            self.root.after(0, lambda: self._set_avatar(str(path)))
-        except Exception:
-            pass
+        self._set_avatar(line[len("캐릭터이미지: "):].strip())
 
     def _set_avatar(self, path):
         img = self._load_avatar(path)

@@ -235,13 +235,55 @@ FIND_NICK_JS = """() => {
 }"""
 
 
-# 경매장 화면 상단의 캐릭터 이미지 주소
+# 경매장 상단의 캐릭터 그림.
+# 이 사이트는 캐릭터를 <canvas> 에 직접 그리므로 이미지 주소가 없다 → 캔버스를 그대로 뽑아온다.
 FIND_CHAR_IMG_JS = """() => {
-  const vis = el => { const r = el.getBoundingClientRect(); return r.width>20 && r.height>20; };
+  const vis = el => { const r = el.getBoundingClientRect(); return r.width > 20 && r.height > 20; };
   const img = [...document.querySelectorAll('img')].filter(vis)
-      .find(i => /avatar\\.maplestory|Character\\/|character/i.test(i.src || ''));
-  return img ? img.src : null;
+      .find(i => /avatar\\.maplestory\\/Character|\\/Character\\//i.test(i.src || ''));
+  if (img) return img.src;
+  const cvs = [...document.querySelectorAll('canvas')].filter(vis)
+      .sort((a, b) => (b.width * b.height) - (a.width * a.height));
+  for (const c of cvs) {
+    try {
+      const d = c.toDataURL('image/png');
+      if (d && d.length > 2000) return d;      // 빈 캔버스는 걸러낸다
+    } catch (e) { /* 다른 출처 이미지가 그려진 캔버스는 읽을 수 없다 */ }
+  }
+  return null;
 }"""
+
+
+def save_char_image(data_or_url, target_h=72):
+    """캐릭터 그림을 파일로 저장하고 경로를 돌려준다.
+    캔버스에는 투명 여백이 많아 그대로 쓰면 작게 보이므로, 여백을 잘라내고 키운다."""
+    try:
+        path = DATA_DIR / "char_avatar.png"
+        if data_or_url.startswith("data:image"):
+            import base64
+            raw = base64.b64decode(data_or_url.split(",", 1)[1])
+        else:
+            import urllib.request
+            req = urllib.request.Request(data_or_url, headers={"User-Agent": "MapleUtil"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                raw = r.read()
+        path.write_bytes(raw)
+        try:
+            import io
+            from PIL import Image
+            im = Image.open(io.BytesIO(raw)).convert("RGBA")
+            box = im.getbbox()               # 투명하지 않은 영역만
+            if box:
+                im = im.crop(box)
+            if im.height and im.height != target_h:
+                w = max(1, round(im.width * target_h / im.height))
+                im = im.resize((w, target_h), Image.LANCZOS)
+            im.save(path)
+        except Exception:
+            pass                             # PIL 이 없거나 실패하면 원본 그대로 사용
+        return str(path)
+    except Exception:
+        return None
 
 
 # 화면의 'Lv.287 | 렌' 표기에서 직업을 읽는다 (API 응답이 없을 때의 대비)
@@ -579,7 +621,9 @@ def capture_on_context(ctx, url, wait_minutes=10, tracker=None):
             img = safe_eval(page, FIND_CHAR_IMG_JS, tries=1)
             if img and img != tracker.char_image:
                 tracker.char_image = img
-                print(f"캐릭터이미지: {img}")
+                saved = save_char_image(img)     # 로그가 길어지지 않게 파일로 저장 후 경로만 알린다
+                if saved:
+                    print(f"캐릭터이미지: {saved}")
 
         # 2단계: 로그인 과정에서 사라진 검색 조건을 원래 링크로 복원
         if url:
