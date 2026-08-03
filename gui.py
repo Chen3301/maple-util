@@ -33,7 +33,7 @@ if "--selftest" in sys.argv:
     sys.exit(0)
 
 APP_NAME = "MapleUtil"
-APP_VERSION = "1.2"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그를 만든다
+APP_VERSION = "1.3"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그를 만든다
 REPO = "Chen3301/maple-util"
 RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
 

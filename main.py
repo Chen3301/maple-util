@@ -966,6 +966,8 @@ SCOUTER_STATE_JS = """() => {
 def scouter_ready(pg, seconds=25):
     """아이템 메이커 UI가 뜰 때까지 대기. (ready, err) 반환"""
     for _ in range(seconds):
+        if cancelled():
+            return False, False
         time.sleep(1)
         st = safe_eval(pg, SCOUTER_STATE_JS) or {}
         if st.get("ready"):
@@ -1385,11 +1387,12 @@ FIND_SLOT_JS = """(key) => {
 }"""
 
 # 적용 결과(보스300 최종뎀)를 읽어 아이템별로 값이 달라지는지 확인한다
+# 최종뎀은 더 나쁜 아이템이면 음수로 나올 수 있으므로 부호까지 읽는다
 READ_FINAL_DMG_JS = """() => {
   const nrm = s => (s||'').replace(/\\s+/g,' ').trim();
   const t = document.body ? nrm(document.body.innerText) : '';
-  const m = t.match(/최종뎀\\s*([0-9.]+)%/);
-  return m ? m[1] : null;
+  const m = t.match(/최종뎀\\s*([+-]?\\s*[0-9.]+)\\s*%/);
+  return m ? m[1].replace(/\\s+/g, '') : null;
 }"""
 
 FILL_SPECUP_JS = """([name, price]) => {
@@ -1432,6 +1435,8 @@ SPECUP_NAMES_JS = """() => {
 def open_result(pg, nickname=None, tries=3):
     """보스컷(결과) 페이지를 연다. 사이트가 에러를 띄우면 재시도."""
     for i in range(tries):
+        if cancelled():
+            return False
         dismiss_popups(pg)          # 공지 팝업이 토글 클릭을 막는 경우가 있다
         st = safe_eval(pg, SET_TOGGLE_JS, ["추가 스펙 시뮬레이터", True])
         if (st or {}).get("found"):
@@ -1442,6 +1447,8 @@ def open_result(pg, nickname=None, tries=3):
         except Exception as e:
             print(f"  ! 결과 페이지 열기 실패: {str(e)[:100]}")
         for k in range(25):
+            if cancelled():
+                return False
             time.sleep(1)
             s = safe_eval(pg, SCOUTER_STATE_JS) or {}
             if s.get("err"):
@@ -1459,6 +1466,8 @@ def open_result(pg, nickname=None, tries=3):
 def wait_item_window(pg, seconds=8):
     """아이템 창이 실제로 열릴 때까지만 기다린다 (고정 대기 대신)"""
     for _ in range(int(seconds * 4)):
+        if cancelled():
+            return False
         time.sleep(0.25)
         n = safe_eval(pg, """() => {
           const vis = el => { const r = el.getBoundingClientRect(); return r.width>0 && r.height>0; };
@@ -1473,6 +1482,8 @@ def wait_dmg(pg, prev, seconds=8):
     """[적용] 후 수치가 갱신될 때까지만 기다린다"""
     last = prev
     for _ in range(int(seconds * 4)):
+        if cancelled():
+            return last
         time.sleep(0.25)
         cur = safe_eval(pg, READ_FINAL_DMG_JS, tries=1)
         if cur and cur != prev:
@@ -1496,6 +1507,9 @@ def register_specup(pg, items, prefix, nickname=None, label_mode="number"):
     ok = skipped = 0
     last_dmg = None
     for idx, it in enumerate(items, 1):
+        if cancelled():
+            print("중지했습니다.")
+            break
         label = labels[idx - 1]
         price_uk = round(it["price"] / 1e8, 2)
         # 방금 추가한 N개는 보관함의 마지막 N개 → 뒤에서 (N-idx+1)번째
@@ -1533,9 +1547,10 @@ def register_specup(pg, items, prefix, nickname=None, label_mode="number"):
         if not safe_eval(pg, CLICK_IN_SECTION_JS, ["추가 스펙 시뮬레이터", "적용"]):
             print("  ! 추가 스펙 시뮬레이터의 [적용] 버튼을 찾지 못했습니다")
         dmg = wait_dmg(pg, prev_dmg)
-        # 0% 면 장착이 안 된 것 — 위치를 다시 계산해 한 번 더 시도한다
-        if dmg in (None, "0.000", "0"):
-            print(f"  . 최종뎀 {dmg}% — 장착이 안 된 것 같아 다시 시도합니다")
+        # 수치를 아예 읽지 못한 경우에만 재시도한다.
+        # (0% 나 음수는 '더 나쁜 아이템' 같은 정상적인 결과일 수 있다)
+        if dmg is None:
+            print("  . 최종뎀을 읽지 못해 장착을 다시 시도합니다")
             slot = safe_eval(pg, FIND_SLOT_JS, it.get("_key")) if it.get("_key") else None
             if slot:
                 if (safe_eval(pg, CLICK_IN_SECTION_JS, ["스펙업 순서 등록", "아이템 창 열기"])
@@ -1567,6 +1582,8 @@ def register_specup(pg, items, prefix, nickname=None, label_mode="number"):
         # 실제로 목록에 들어갔는지 확인 (클릭만으로 성공 판정하지 않는다)
         after_n = before_n
         for _ in range(24):
+            if cancelled():
+                break
             time.sleep(0.25)
             after_n = safe_eval(pg, SPECUP_COUNT_JS, tries=1) or 0
             if after_n > before_n:
