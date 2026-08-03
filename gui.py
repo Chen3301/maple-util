@@ -91,15 +91,15 @@ DARK = dict(
     ACCENT="#ff8a3d", ACCENT_HOVER="#ffa462", GRAD1="#ff7a29", GRAD2="#e0457b",
     GREEN="#4ade80", RED="#f87171", LOG_BG="#0c0e14", LOG_FG="#c8ccd8",
     OFF="#3a3f4f", UPD_BG="#2b2419", UPD_FG="#ffca7a", DIM="#6b7085",
-    DIS_BG="#1e2129", DIS_FG="#5f6478",
+    DIS_BG="#1e2129", DIS_FG="#5f6478", SWITCH="#34c759",
 )
 LIGHT = dict(
     BG="#f4f5f8", CARD="#ffffff", FIELD="#eef0f5", FIELD_HOVER="#e2e6ef",
     FG="#1e2130", MUTED="#6b7085", BTN="#e4e7ee", BTN_HOVER="#d5d9e4",
     ACCENT="#f97316", ACCENT_HOVER="#fb923c", GRAD1="#ff7a29", GRAD2="#e0457b",
     GREEN="#22c55e", RED="#dc2626", LOG_BG="#ffffff", LOG_FG="#2b2f3d",
-    OFF="#c8ccd8", UPD_BG="#fff3e0", UPD_FG="#a35a12", DIM="#9aa0b4",
-    DIS_BG="#e9ebf0", DIS_FG="#a8adba",
+    OFF="#cdd2dd", UPD_BG="#fff3e0", UPD_FG="#a35a12", DIM="#9aa0b4",
+    DIS_BG="#e9ebf0", DIS_FG="#a8adba", SWITCH="#30bf55",
 )
 
 
@@ -325,7 +325,7 @@ class App:
         outer.pack(fill="both", expand=True)
 
         def mk_toggle(parent, text, var, cmd=None):
-            return Toggle(parent, text, var, command=cmd, bg=CARD, on_color=GREEN,
+            return Toggle(parent, text, var, command=cmd, bg=CARD, on_color=SWITCH,
                           off_color=OFF, fg=FG, muted=MUTED)
 
         def mk_drop(parent, var, values, width):
@@ -371,28 +371,30 @@ class App:
         # 버튼
         btns = tk.Frame(outer, bg=BG)
         btns.pack(fill="x", pady=(4, 10))
-        def mk_btn(text, cmd, w, accent=False):
-            return RoundButton(btns, text, cmd,
-                               ACCENT if accent else BTN,
-                               ACCENT_HOVER if accent else BTN_HOVER,
-                               "#17110a" if accent else FG,
-                               width=w, parent_bg=BG, dis_bg=DIS_BG, dis_fg=DIS_FG)
-
-        self.run_btn = mk_btn("실행", self.run, 100, accent=True)
-        self.run_btn.pack(side="left")
-        self.now_btn = mk_btn("현재 화면 등록", self.run_current, 130)
-        self.now_btn.pack(side="left", padx=8)
-        self.stop_btn = mk_btn("중지", self.stop, 84)
-        self.stop_btn.pack(side="left")
+        # 버튼을 가로로 고르게 배치 (칸을 같은 너비로 나눠 그 안에 중앙 정렬)
+        specs = [
+            ("실행", self.run, True, CARD),
+            ("현재 화면 등록", self.run_current, False, None),
+            ("중지", self.stop, False, None),
+            ("옥션 창", lambda: self.open_site("auction"), False, None),
+            ("환산 창", lambda: self.open_site("scouter"), False, None),
+            ("로그 지우기", self.clear_log, False, CARD),
+        ]
+        made = []
+        for i, (text, cmd, accent, quiet) in enumerate(specs):
+            cell = tk.Frame(btns, bg=BG)
+            cell.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0))
+            btns.grid_columnconfigure(i, weight=1, uniform="btn")
+            b = RoundButton(cell, text, cmd,
+                            ACCENT if accent else (quiet or BTN),
+                            ACCENT_HOVER if accent else (FIELD_HOVER if quiet else BTN_HOVER),
+                            "#17110a" if accent else (MUTED if quiet else FG),
+                            width=118, parent_bg=BG, dis_bg=DIS_BG, dis_fg=DIS_FG)
+            b.pack(fill="x")
+            made.append(b)
+        (self.run_btn, self.now_btn, self.stop_btn,
+         self.auc_btn, self.sc_btn, self.clear_btn) = made
         self.stop_btn.set_enabled(False)
-        self.auc_btn = mk_btn("옥션 창", lambda: self.open_site("auction"), 92)
-        self.auc_btn.pack(side="left", padx=8)
-        self.sc_btn = mk_btn("환산 창", lambda: self.open_site("scouter"), 92)
-        self.sc_btn.pack(side="left")
-        self.clear_btn = RoundButton(btns, "로그 지우기", self.clear_log, CARD, FIELD_HOVER,
-                                     MUTED, width=104, parent_bg=BG,
-                                     dis_bg=DIS_BG, dis_fg=DIS_FG)
-        self.clear_btn.pack(side="right")
 
         self.activity = ActivityBar(outer, BG, ACCENT)
         self.activity.pack(fill="x", pady=(0, 6))

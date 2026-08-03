@@ -101,16 +101,15 @@ class Toggle(tk.Frame):
         self.command = command
         self.on_color, self.off_color = on_color, off_color
         self.fg, self.muted = fg, muted
-        w, h = 44, 24
-        self.w, self.h = w, h
+        w, h, pad = 38, 21, 2      # 얇고 낮은 비율이 더 정돈돼 보인다
+        self.w, self.h, self.pad = w, h, pad
         self.cv = tk.Canvas(self, width=w, height=h, bd=0, highlightthickness=0,
                             bg=bg, cursor="hand2")
         self.cv.pack(side="left")
-        self.track = round_rect(self.cv, 1, 1, w - 1, h - 1, (h - 2) / 2,
-                                fill=off_color, outline="")
-        # 손잡이에 옅은 테두리를 줘서 더 또렷하게 (tkinter 는 투명도를 지원하지 않는다)
-        self.knob_ring = self.cv.create_oval(3, 3, h - 3, h - 3, fill="", outline="#c9ced9")
-        self.knob = self.cv.create_oval(4, 4, h - 4, h - 4, fill="#ffffff", outline="")
+        self.track = round_rect(self.cv, 0, 0, w, h, h / 2, fill=off_color, outline="")
+        d = h - pad * 2
+        self.knob = self.cv.create_oval(pad, pad, pad + d, pad + d,
+                                        fill="#ffffff", outline="")
         self.lbl = tk.Label(self, text=text, bg=bg, fg=fg, cursor="hand2",
                             font=("Malgun Gothic", 9))
         self.lbl.pack(side="left", padx=(10, 0))
@@ -140,11 +139,10 @@ class Toggle(tk.Frame):
         self._render()
 
     def _render(self):
-        h, w = self.h, self.w
-        travel = w - h          # 손잡이가 움직일 거리
-        x = 3 + self._pos * travel
-        self.cv.coords(self.knob_ring, x, 3, x + h - 6, h - 3)
-        self.cv.coords(self.knob, x + 1, 4, x + h - 7, h - 4)
+        h, w, pad = self.h, self.w, self.pad
+        d = h - pad * 2
+        x = pad + self._pos * (w - h)      # 손잡이 이동 거리
+        self.cv.coords(self.knob, x, pad, x + d, pad + d)
         self.cv.itemconfigure(self.track, fill=lerp(self.off_color, self.on_color, self._pos))
         self.lbl.configure(fg=self.fg if self._pos > 0.5 else self.muted)
 
