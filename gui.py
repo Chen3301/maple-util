@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from tkinter import font as tkfont
 from tkinter import scrolledtext, ttk
 
 import main as core
-from widgets import ActivityBar, GradientHeader, RoundButton, Toggle
+from widgets import ActivityBar, Dropdown, GradientHeader, RoundButton, Toggle
 
 if "--selftest" in sys.argv:
     from playwright.sync_api import sync_playwright
@@ -32,9 +33,35 @@ if "--selftest" in sys.argv:
     sys.exit(0)
 
 APP_NAME = "MapleUtil"
-APP_VERSION = "1.0"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그(v1.1)를 만든다
+APP_VERSION = "1.1"          # 새 버전을 낼 때 여기를 올리고 같은 번호로 릴리스 태그를 만든다
 REPO = "Chen3301/maple-util"
 RELEASE_PAGE = f"https://github.com/{REPO}/releases/latest"
+
+
+_mci_seq = [0]
+
+
+def play_sound(kind):
+    """작업 알림음. 동봉한 mp3 를 MCI 로 재생하고, 없으면 시스템 소리로 대체한다."""
+    if kind == "done":
+        path = resource("notify.mp3")
+        if path:
+            try:
+                import ctypes
+                _mci_seq[0] += 1
+                alias = f"mapleutil{_mci_seq[0]}"
+                mci = ctypes.windll.winmm.mciSendStringW
+                mci(f'open "{path}" type mpegvideo alias {alias}', None, 0, 0)
+                mci(f"play {alias} notify", None, 0, 0)
+                return
+            except Exception:
+                pass
+    try:
+        import winsound
+        alias = {"done": "SystemAsterisk", "error": "SystemHand"}.get(kind, "SystemAsterisk")
+        winsound.PlaySound(alias, winsound.SND_ALIAS | winsound.SND_ASYNC)
+    except Exception:
+        pass
 
 
 def parse_ver(s):
@@ -57,19 +84,30 @@ def fetch_latest_version(timeout=6):
     except Exception:
         return None
 
-# 팔레트
-BG = "#0f1117"
-CARD = "#171a23"
-FIELD = "#212533"
-FG = "#e6e8ef"
-MUTED = "#8b90a3"
-ACCENT = "#ff8a3d"
-ACCENT_HOVER = "#ffa462"
-GRAD1 = "#ff7a29"
-GRAD2 = "#e0457b"
-GREEN = "#4ade80"
-RED = "#f87171"
-LOG_BG = "#0c0e14"
+# 팔레트 (다크/라이트)
+DARK = dict(
+    BG="#0f1117", CARD="#171a23", FIELD="#212533", FIELD_HOVER="#2a2f40",
+    FG="#e6e8ef", MUTED="#8b90a3", BTN="#333849", BTN_HOVER="#454b60",
+    ACCENT="#ff8a3d", ACCENT_HOVER="#ffa462", GRAD1="#ff7a29", GRAD2="#e0457b",
+    GREEN="#4ade80", RED="#f87171", LOG_BG="#0c0e14", LOG_FG="#c8ccd8",
+    OFF="#3a3f4f", UPD_BG="#2b2419", UPD_FG="#ffca7a", DIM="#6b7085",
+    DIS_BG="#1e2129", DIS_FG="#5f6478",
+)
+LIGHT = dict(
+    BG="#f4f5f8", CARD="#ffffff", FIELD="#eef0f5", FIELD_HOVER="#e2e6ef",
+    FG="#1e2130", MUTED="#6b7085", BTN="#e4e7ee", BTN_HOVER="#d5d9e4",
+    ACCENT="#f97316", ACCENT_HOVER="#fb923c", GRAD1="#ff7a29", GRAD2="#e0457b",
+    GREEN="#22c55e", RED="#dc2626", LOG_BG="#ffffff", LOG_FG="#2b2f3d",
+    OFF="#c8ccd8", UPD_BG="#fff3e0", UPD_FG="#a35a12", DIM="#9aa0b4",
+    DIS_BG="#e9ebf0", DIS_FG="#a8adba",
+)
+
+
+def apply_palette(p):
+    globals().update(p)
+
+
+apply_palette(DARK)
 
 _MUTEX = None
 
@@ -157,6 +195,8 @@ class App:
         self.q = queue.Queue()
         self.cmd_q = queue.Queue()
         self.running = False
+        self.update_tag = None
+        self.log_cache = []          # 테마를 바꿔 다시 그릴 때 로그를 유지하기 위해
 
         ico = resource("app.ico") or resource("icon.ico")
         if ico:
@@ -164,25 +204,55 @@ class App:
                 root.iconbitmap(ico)
             except Exception:
                 pass
-        self.avatar = None
-        av = resource("avatar.png")
-        if av:
-            try:
-                img = tk.PhotoImage(file=av)
-                self.avatar = img.subsample(max(1, img.width() // 52))
-            except Exception:
-                self.avatar = None
+        self.default_avatar = self._load_avatar(resource("avatar.png"))
+        self.avatar = self.default_avatar
+
+        # 설정 값들 (테마를 바꿔도 유지된다)
+        self.auto_var = tk.BooleanVar(value=True)
+        self.nick_var = tk.StringVar()
+        self.job_var = tk.StringVar(value="렌")
+        self.n_var = tk.IntVar(value=5)
+        self.label_var = tk.StringVar(value="번호")
+        self.specup_var = tk.BooleanVar(value=True)
+        self.loop_var = tk.BooleanVar(value=True)
+        self.sound_var = tk.BooleanVar(value=True)
+        self.dark_var = tk.BooleanVar(value=True)
 
         self._init_style()
-        root.option_add("*TCombobox*Listbox.background", FIELD)
-        root.option_add("*TCombobox*Listbox.foreground", FG)
-        root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-        root.option_add("*TCombobox*Listbox.selectForeground", "#12141b")
         self._build(root)
         self._sync_auto()
         threading.Thread(target=self._worker, daemon=True).start()
         threading.Thread(target=self._check_update, daemon=True).start()
         self.root.after(120, self.drain)
+
+    def _load_avatar(self, path, box=52):
+        if not path:
+            return None
+        try:
+            img = tk.PhotoImage(file=path)
+            f = max(1, max(img.width(), img.height()) // box)
+            return img.subsample(f)
+        except Exception:
+            return None
+
+    # ---------- 테마 ----------
+
+    def toggle_theme(self):
+        apply_palette(DARK if self.dark_var.get() else LIGHT)
+        self.root.configure(bg=BG)
+        for w in self.root.winfo_children():
+            w.destroy()
+        self._init_style()
+        self._build(self.root)
+        self._sync_auto()
+        # 로그 복원
+        self.log_box.configure(state="normal")
+        for text, tag in self.log_cache[-500:]:
+            self.log_box.insert("end", text, tag or "")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+        if self.update_tag:
+            self._show_update(self.update_tag)
 
     def _check_update(self):
         """시작할 때 최신 릴리스를 조회해 새 버전이면 알림 띠를 띄운다"""
@@ -192,6 +262,7 @@ class App:
         self.root.after(0, lambda: self._show_update(tag))
 
     def _show_update(self, tag):
+        self.update_tag = tag
         self.update_lbl.configure(
             text=f"새 버전 {tag} 이 나왔습니다  (현재 v{APP_VERSION})")
         self.update_bar.pack(fill="x", after=self.header)
@@ -216,10 +287,8 @@ class App:
                arrowcolor=[("disabled", "#5f6478")])
         st.configure("TEntry", fieldbackground=FIELD, foreground=FG, insertcolor=FG,
                      borderwidth=0, padding=5)
-        st.map("TEntry", fieldbackground=[("disabled", "#1a1d27")],
-               foreground=[("disabled", "#5f6478")])
-        st.configure("TSpinbox", fieldbackground=FIELD, foreground=FG, arrowcolor=FG,
-                     borderwidth=0, padding=4)
+        st.map("TEntry", fieldbackground=[("disabled", DIS_BG)],
+               foreground=[("disabled", DIS_FG)])
 
     def _card(self, parent, title):
         outer = tk.Frame(parent, bg=BG)
@@ -241,11 +310,11 @@ class App:
         self.header.pack(fill="x")
 
         # 새 버전 알림 (있을 때만 보인다)
-        self.update_bar = tk.Frame(root, bg="#2b2419")
-        self.update_lbl = tk.Label(self.update_bar, text="", bg="#2b2419", fg="#ffca7a",
+        self.update_bar = tk.Frame(root, bg=UPD_BG)
+        self.update_lbl = tk.Label(self.update_bar, text="", bg=UPD_BG, fg=UPD_FG,
                                    font=("Malgun Gothic", 9, "bold"))
         self.update_lbl.pack(side="left", padx=(18, 12), pady=9)
-        tk.Label(self.update_bar, text="다운로드 페이지 열기", bg="#2b2419", fg=ACCENT,
+        tk.Label(self.update_bar, text="다운로드 페이지 열기", bg=UPD_BG, fg=ACCENT,
                  cursor="hand2", font=("Malgun Gothic", 9, "underline")
                  ).pack(side="left", pady=9)
         for w in self.update_bar.winfo_children():
@@ -255,23 +324,28 @@ class App:
         outer = tk.Frame(root, bg=BG, padx=18, pady=16)
         outer.pack(fill="both", expand=True)
 
+        def mk_toggle(parent, text, var, cmd=None):
+            return Toggle(parent, text, var, command=cmd, bg=CARD, on_color=GREEN,
+                          off_color=OFF, fg=FG, muted=MUTED)
+
+        def mk_drop(parent, var, values, width):
+            return Dropdown(parent, var, values, width=width, bg=FIELD, hover=FIELD_HOVER,
+                            fg=FG, muted=MUTED, accent=ACCENT, parent_bg=CARD,
+                            dis_bg=DIS_BG, dis_fg=DIS_FG)
+
         # 캐릭터
         c1 = self._card(outer, "캐릭터")
-        self.auto_var = tk.BooleanVar(value=True)
-        Toggle(c1, "경매장에 입장한 캐릭터를 자동으로 사용", self.auto_var,
-               command=self._sync_auto, bg=CARD, on_color=GREEN,
-               fg=FG, muted=MUTED).pack(anchor="w")
+        mk_toggle(c1, "경매장에 입장한 캐릭터를 자동으로 사용",
+                  self.auto_var, self._sync_auto).pack(anchor="w")
         r = tk.Frame(c1, bg=CARD)
         r.pack(fill="x", pady=(12, 0))
         tk.Label(r, text="닉네임", bg=CARD, fg=MUTED,
                  font=("Malgun Gothic", 9)).pack(side="left")
-        self.nick_var = tk.StringVar()
         self.nick_entry = ttk.Entry(r, textvariable=self.nick_var, width=18)
         self.nick_entry.pack(side="left", padx=(10, 22))
         tk.Label(r, text="직업", bg=CARD, fg=MUTED,
                  font=("Malgun Gothic", 9)).pack(side="left")
-        self.job_var = tk.StringVar(value="렌")
-        self.job_combo = ttk.Combobox(r, textvariable=self.job_var, values=JOBS, width=18)
+        self.job_combo = mk_drop(r, self.job_var, JOBS, 168)
         self.job_combo.pack(side="left", padx=10)
 
         # 등록 설정
@@ -280,42 +354,44 @@ class App:
         r2.pack(fill="x")
         tk.Label(r2, text="상위", bg=CARD, fg=MUTED,
                  font=("Malgun Gothic", 9)).pack(side="left")
-        self.n_var = tk.IntVar(value=5)
-        ttk.Spinbox(r2, from_=1, to=20, width=4,
-                    textvariable=self.n_var).pack(side="left", padx=8)
+        mk_drop(r2, self.n_var, [str(i) for i in range(1, 21)], 62).pack(side="left", padx=8)
         tk.Label(r2, text="개", bg=CARD, fg=MUTED,
                  font=("Malgun Gothic", 9)).pack(side="left")
         tk.Label(r2, text="이름 접미사", bg=CARD, fg=MUTED,
                  font=("Malgun Gothic", 9)).pack(side="left", padx=(26, 0))
-        self.label_var = tk.StringVar(value="번호")
-        ttk.Combobox(r2, textvariable=self.label_var, values=["번호", "가격"],
-                     width=7, state="readonly").pack(side="left", padx=10)
+        mk_drop(r2, self.label_var, ["번호", "가격"], 90).pack(side="left", padx=10)
 
-        self.specup_var = tk.BooleanVar(value=True)
-        Toggle(c2, "보스컷 [스펙업 순서 등록]까지 자동으로", self.specup_var,
-               bg=CARD, on_color=GREEN, fg=FG, muted=MUTED).pack(anchor="w", pady=(14, 0))
-        self.loop_var = tk.BooleanVar(value=True)
-        Toggle(c2, "연속 모드 — 검색할 때마다 계속 등록", self.loop_var,
-               bg=CARD, on_color=GREEN, fg=FG, muted=MUTED).pack(anchor="w", pady=(8, 0))
+        mk_toggle(c2, "보스컷 [스펙업 순서 등록]까지 자동으로",
+                  self.specup_var).pack(anchor="w", pady=(14, 0))
+        mk_toggle(c2, "연속 모드 — 검색할 때마다 계속 등록",
+                  self.loop_var).pack(anchor="w", pady=(8, 0))
+        mk_toggle(c2, "작업이 끝나면 알림음", self.sound_var).pack(anchor="w", pady=(8, 0))
+        mk_toggle(c2, "다크 모드", self.dark_var, self.toggle_theme).pack(anchor="w", pady=(8, 0))
 
         # 버튼
         btns = tk.Frame(outer, bg=BG)
         btns.pack(fill="x", pady=(4, 10))
-        self.run_btn = RoundButton(btns, "실행", self.run, ACCENT, ACCENT_HOVER,
-                                   "#17110a", width=112, parent_bg=BG)
+        def mk_btn(text, cmd, w, accent=False):
+            return RoundButton(btns, text, cmd,
+                               ACCENT if accent else BTN,
+                               ACCENT_HOVER if accent else BTN_HOVER,
+                               "#17110a" if accent else FG,
+                               width=w, parent_bg=BG, dis_bg=DIS_BG, dis_fg=DIS_FG)
+
+        self.run_btn = mk_btn("실행", self.run, 100, accent=True)
         self.run_btn.pack(side="left")
-        self.stop_btn = RoundButton(btns, "중지", self.stop, "#333849", "#454b60",
-                                    FG, width=112, parent_bg=BG)
-        self.stop_btn.pack(side="left", padx=10)
+        self.now_btn = mk_btn("현재 화면 등록", self.run_current, 130)
+        self.now_btn.pack(side="left", padx=8)
+        self.stop_btn = mk_btn("중지", self.stop, 84)
+        self.stop_btn.pack(side="left")
         self.stop_btn.set_enabled(False)
-        self.auc_btn = RoundButton(btns, "메이플옥션 창", lambda: self.open_site("auction"),
-                                   "#333849", "#454b60", FG, width=128, parent_bg=BG)
-        self.auc_btn.pack(side="left")
-        self.sc_btn = RoundButton(btns, "환산주스탯 창", lambda: self.open_site("scouter"),
-                                  "#333849", "#454b60", FG, width=128, parent_bg=BG)
-        self.sc_btn.pack(side="left", padx=10)
-        self.clear_btn = RoundButton(btns, "로그 지우기", self.clear_log,
-                                     "#1c2029", "#2a2f3d", MUTED, width=112, parent_bg=BG)
+        self.auc_btn = mk_btn("옥션 창", lambda: self.open_site("auction"), 92)
+        self.auc_btn.pack(side="left", padx=8)
+        self.sc_btn = mk_btn("환산 창", lambda: self.open_site("scouter"), 92)
+        self.sc_btn.pack(side="left")
+        self.clear_btn = RoundButton(btns, "로그 지우기", self.clear_log, CARD, FIELD_HOVER,
+                                     MUTED, width=104, parent_bg=BG,
+                                     dis_bg=DIS_BG, dis_fg=DIS_FG)
         self.clear_btn.pack(side="right")
 
         self.activity = ActivityBar(outer, BG, ACCENT)
@@ -333,15 +409,15 @@ class App:
         mono = tkfont.Font(family="Consolas", size=9)
         self.log_box = scrolledtext.ScrolledText(
             outer, height=15, state="disabled", font=mono,
-            bg=LOG_BG, fg="#c8ccd8", insertbackground=FG,
+            bg=LOG_BG, fg=LOG_FG, insertbackground=FG,
             relief="flat", borderwidth=0, padx=12, pady=10)
         self.log_box.pack(fill="both", expand=True)
         self.log_box.tag_configure("ok", foreground=GREEN)
-        self.log_box.tag_configure("warn", foreground="#ffb454")
+        self.log_box.tag_configure("warn", foreground="#e8912a")
         self.log_box.tag_configure("err", foreground=RED)
         self.log_box.tag_configure("head", foreground=ACCENT,
                                    font=("Consolas", 9, "bold"))
-        self.log_box.tag_configure("dim", foreground="#6b7085")
+        self.log_box.tag_configure("dim", foreground=DIM)
 
     # ---------- 로그 ----------
 
@@ -372,33 +448,81 @@ class App:
             while True:
                 line = self.q.get_nowait()
                 self._maybe_fill_character(line)
+                self._maybe_swap_avatar(line)
+                self._maybe_beep(line)
                 if line.strip():
                     self.status.configure(text=line.strip()[:95])
+                stamp = time.strftime("%H:%M:%S")
+                text = f"[{stamp}] {line}\n"
+                tag = self._tag_for(line)
+                self.log_cache.append((text, tag))
                 self.log_box.configure(state="normal")
-                self.log_box.insert("end", line + "\n", self._tag_for(line) or "")
+                self.log_box.insert("end", text, tag or "")
                 self.log_box.see("end")
                 self.log_box.configure(state="disabled")
         except queue.Empty:
             pass
         self.root.after(120, self.drain)
 
+    def _maybe_swap_avatar(self, line):
+        """경매장에서 캐릭터 이미지를 확인하면 헤더 아바타를 그 캐릭터로 바꾼다"""
+        if not line.startswith("캐릭터이미지: "):
+            return
+        url = line[len("캐릭터이미지: "):].strip()
+        threading.Thread(target=self._download_avatar, args=(url,), daemon=True).start()
+
+    def _download_avatar(self, url):
+        try:
+            import urllib.request
+            dest = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MapleAuctionUtil"
+            dest.mkdir(parents=True, exist_ok=True)
+            path = dest / "char_avatar.png"
+            req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = r.read()
+            path.write_bytes(data)
+            self.root.after(0, lambda: self._set_avatar(str(path)))
+        except Exception:
+            pass
+
+    def _set_avatar(self, path):
+        img = self._load_avatar(path)
+        if img is None:
+            return
+        self.avatar = img
+        try:
+            self.header.avatar = img
+            self.header._draw()
+        except Exception:
+            pass
+
+    def _maybe_beep(self, line):
+        """한 사이클이 끝났거나 실패했을 때 알림음"""
+        if not self.sound_var.get():
+            return
+        s = line.strip()
+        if s.startswith("=== 이번 실행 완료"):
+            play_sound("done")
+        elif s.startswith("오류:") or "가져오지 못했습니다" in s or "열지 못해" in s:
+            play_sound("error")
+
     def _maybe_fill_character(self, line):
         if not line.startswith("캐릭터 확인: "):
             return
         nick, _, job = line[len("캐릭터 확인: "):].partition("/")
-        for var, widget, val in ((self.nick_var, self.nick_entry, nick.strip()),
-                                 (self.job_var, self.job_combo, job.strip())):
-            if not val or val.startswith("("):
-                continue
-            state = widget.cget("state")
-            widget.configure(state="normal")
-            var.set(val)
-            widget.configure(state=state)
+        nick, job = nick.strip(), job.strip()
+        if nick and not nick.startswith("("):
+            state = self.nick_entry.cget("state")
+            self.nick_entry.configure(state="normal")
+            self.nick_var.set(nick)
+            self.nick_entry.configure(state=state)
+        if job and not job.startswith("("):
+            self.job_var.set(job)
 
     def _sync_auto(self):
-        state = "disabled" if self.auto_var.get() else "normal"
-        self.nick_entry.configure(state=state)
-        self.job_combo.configure(state=state)
+        auto = self.auto_var.get()
+        self.nick_entry.configure(state="disabled" if auto else "normal")
+        self.job_combo.set_enabled(not auto)
 
     # ---------- 작업 ----------
 
@@ -420,6 +544,10 @@ class App:
                         session = core.Session()
                     if cmd[0] == "open":
                         session.open_site(cmd[1])
+                    elif cmd[0] == "now":
+                        _, n, job, nick, specup, auto, mode = cmd
+                        session.use_current(n, job, specup=specup, auto_match=auto,
+                                            label_mode=mode, manual_nick=nick)
                     elif cmd[0] == "run":
                         _, n, job, nick, specup, auto, loop, mode = cmd
                         while True:
@@ -446,9 +574,8 @@ class App:
                     self.root.after(0, self._idle_ui)
 
     def _idle_ui(self):
-        self.run_btn.set_enabled(True)
-        self.sc_btn.set_enabled(True)
-        self.auc_btn.set_enabled(True)
+        for b in (self.run_btn, self.now_btn, self.sc_btn, self.auc_btn):
+            b.set_enabled(True)
         self.stop_btn.set_enabled(False)
         self.activity.stop()
         self.dot.itemconfigure(self.dot_id, fill=MUTED)
@@ -463,20 +590,32 @@ class App:
             return
         core.CANCEL.clear()
         self.running = True
-        self.run_btn.set_enabled(False)
-        self.sc_btn.set_enabled(False)
-        self.auc_btn.set_enabled(False)
+        for b in (self.run_btn, self.now_btn, self.sc_btn, self.auc_btn):
+            b.set_enabled(False)
         self.stop_btn.set_enabled(True)
         self.activity.start()
         self.dot.itemconfigure(self.dot_id, fill=GREEN)
         self.cmd_q.put(cmd)
 
+    def _opts(self):
+        try:
+            n = int(self.n_var.get())
+        except Exception:
+            n = 5
+        return (n, self.job_var.get().strip() or "렌",
+                self.nick_var.get().strip() or None, self.specup_var.get(),
+                self.auto_var.get(),
+                "price" if self.label_var.get() == "가격" else "number")
+
     def run(self):
         self.log("경매장 창에서 아이템을 검색하세요. 결과가 나오면 자동으로 등록합니다.")
-        self._submit(("run", self.n_var.get(), self.job_var.get().strip() or "렌",
-                      self.nick_var.get().strip() or None, self.specup_var.get(),
-                      self.auto_var.get(), self.loop_var.get(),
-                      "price" if self.label_var.get() == "가격" else "number"))
+        n, job, nick, specup, auto, mode = self._opts()
+        self._submit(("run", n, job, nick, specup, auto, self.loop_var.get(), mode))
+
+    def run_current(self):
+        self.log("지금 브라우저에 떠 있는 검색 결과를 그대로 등록합니다. (검색 횟수 소모 없음)")
+        n, job, nick, specup, auto, mode = self._opts()
+        self._submit(("now", n, job, nick, specup, auto, mode))
 
     def open_site(self, which):
         self._submit(("open", which))

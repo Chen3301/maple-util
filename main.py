@@ -235,6 +235,15 @@ FIND_NICK_JS = """() => {
 }"""
 
 
+# 경매장 화면 상단의 캐릭터 이미지 주소
+FIND_CHAR_IMG_JS = """() => {
+  const vis = el => { const r = el.getBoundingClientRect(); return r.width>20 && r.height>20; };
+  const img = [...document.querySelectorAll('img')].filter(vis)
+      .find(i => /avatar\\.maplestory|Character\\/|character/i.test(i.src || ''));
+  return img ? img.src : null;
+}"""
+
+
 # 화면의 'Lv.287 | 렌' 표기에서 직업을 읽는다 (API 응답이 없을 때의 대비)
 FIND_JOB_JS = """() => {
   const nrm = s => (s||'').replace(/\\s+/g,' ').trim();
@@ -412,6 +421,8 @@ class SearchTracker:
         self.errors = []           # 검색 실패 응답(예: 결과가 너무 많음)
         self.character = None      # 경매장에 입장한 캐릭터 닉네임
         self.job = None            # 그 캐릭터의 직업
+        self.char_image = None     # 캐릭터 이미지 주소
+        self.last_payload = None   # 직전 검색 결과 (화면에 떠 있는 목록 재사용용)
 
     def attach(self, pg):
         try:
@@ -474,7 +485,9 @@ class SearchTracker:
             pass
 
     def reset(self):
-        """검색 상태만 초기화 (캐릭터 닉네임은 유지)"""
+        """검색 상태만 초기화 (캐릭터 정보와 직전 검색 결과는 유지)"""
+        if self.payloads:
+            self.last_payload = self.payloads[-1]
         self.payloads.clear()
         self.errors.clear()
         self.requests = 0
@@ -563,6 +576,10 @@ def capture_on_context(ctx, url, wait_minutes=10, tracker=None):
         if external:
             print(f"캐릭터 확인: {tracker.character or '(못 찾음)'} / "
                   f"{tracker.job or '(직업 못 찾음)'}")
+            img = safe_eval(page, FIND_CHAR_IMG_JS, tries=1)
+            if img and img != tracker.char_image:
+                tracker.char_image = img
+                print(f"캐릭터이미지: {img}")
 
         # 2단계: 로그인 과정에서 사라진 검색 조건을 원래 링크로 복원
         if url:
@@ -1730,12 +1747,28 @@ class Session:
         self.tracker.reset()
         return capture_on_context(self.ctx, url, wait_minutes, self.tracker)
 
+    def use_current(self, top_n, job, specup=False, auto_match=True,
+                    label_mode="number", manual_nick=None):
+        """새로 검색하지 않고, 브라우저에 이미 떠 있는 검색 결과를 그대로 등록한다.
+        (검색 횟수를 소모하지 않는다)"""
+        payload = self.tracker.payloads[-1] if self.tracker.payloads else self.tracker.last_payload
+        if payload is None:
+            print("아직 받아둔 검색 결과가 없습니다.")
+            print("  → 경매장 창에서 한 번 검색하면 그 결과를 바로 쓸 수 있습니다.")
+            return False
+        return self._register(payload, top_n, job, specup, auto_match, label_mode, manual_nick)
+
     def run_once(self, url, top_n, job, prefix=None, wait_minutes=10, specup=False,
                  auto_match=True, label_mode="number", manual_nick=None):
         payload = self.search(url, wait_minutes)
         if payload is None:
             print("매물 목록을 가져오지 못했습니다.")
             return False
+        return self._register(payload, top_n, job, specup, auto_match, label_mode,
+                              manual_nick, prefix)
+
+    def _register(self, payload, top_n, job, specup, auto_match, label_mode,
+                  manual_nick, prefix=None):
         total_found = payload.get("total", len(payload.get("items", [])))
         print(f"경매장 목록 수신: 검색결과 {total_found}건 중 상위 {top_n}개를 사용합니다.")
         items = parse_items(payload, top_n)

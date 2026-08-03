@@ -17,6 +17,7 @@ if (Test-Path app.ico) {
     Write-Output "아이콘 없음 (icon.png 를 폴더에 넣으면 자동 적용됩니다)"
 }
 if (Test-Path avatar.png) { $pyiArgs += @("--add-data", "avatar.png;.") }
+if (Test-Path notify.mp3) { $pyiArgs += @("--add-data", "notify.mp3;.") }
 $pyiArgs += "gui.py"
 
 $out = & .\venv\Scripts\pyinstaller.exe @pyiArgs

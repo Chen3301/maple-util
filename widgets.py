@@ -29,11 +29,13 @@ class RoundButton(tk.Canvas):
     """둥근 모서리 + 마우스 올릴 때 색이 서서히 변하는 버튼"""
 
     def __init__(self, parent, text, command, bg, hover, fg, width=112, height=40,
-                 radius=12, bold=True, parent_bg=None):
+                 radius=12, bold=True, parent_bg=None,
+                 dis_bg="#2a2d3a", dis_fg="#6b7085"):
         super().__init__(parent, width=width, height=height, bd=0, highlightthickness=0,
                          bg=parent_bg or parent["bg"])
         self.command = command
         self.base, self.hover_c, self.fg = bg, hover, fg
+        self.dis_bg, self.dis_fg = dis_bg, dis_fg
         self._t = 0.0
         self._target = 0.0
         self._anim = None
@@ -72,7 +74,9 @@ class RoundButton(tk.Canvas):
             self.shape, fill=lerp(self.base, self.hover_c, self._t)))
         self.command()
 
-    def set_enabled(self, on, disabled_bg="#2a2d3a", disabled_fg="#6b7085"):
+    def set_enabled(self, on, disabled_bg=None, disabled_fg=None):
+        disabled_bg = disabled_bg or self.dis_bg
+        disabled_fg = disabled_fg or self.dis_fg
         # 진행 중이던 호버 애니메이션을 멈춘다 (안 그러면 비활성 색을 덮어쓴다)
         if self._anim is not None:
             try:
@@ -97,13 +101,16 @@ class Toggle(tk.Frame):
         self.command = command
         self.on_color, self.off_color = on_color, off_color
         self.fg, self.muted = fg, muted
-        w, h = 42, 22
+        w, h = 44, 24
+        self.w, self.h = w, h
         self.cv = tk.Canvas(self, width=w, height=h, bd=0, highlightthickness=0,
                             bg=bg, cursor="hand2")
         self.cv.pack(side="left")
         self.track = round_rect(self.cv, 1, 1, w - 1, h - 1, (h - 2) / 2,
                                 fill=off_color, outline="")
-        self.knob = self.cv.create_oval(3, 3, h - 3, h - 3, fill="#ffffff", outline="")
+        # 손잡이에 옅은 테두리를 줘서 더 또렷하게 (tkinter 는 투명도를 지원하지 않는다)
+        self.knob_ring = self.cv.create_oval(3, 3, h - 3, h - 3, fill="", outline="#c9ced9")
+        self.knob = self.cv.create_oval(4, 4, h - 4, h - 4, fill="#ffffff", outline="")
         self.lbl = tk.Label(self, text=text, bg=bg, fg=fg, cursor="hand2",
                             font=("Malgun Gothic", 9))
         self.lbl.pack(side="left", padx=(10, 0))
@@ -133,11 +140,101 @@ class Toggle(tk.Frame):
         self._render()
 
     def _render(self):
-        h = 22
-        x = 3 + self._pos * 20
-        self.cv.coords(self.knob, x, 3, x + h - 6, h - 3)
+        h, w = self.h, self.w
+        travel = w - h          # 손잡이가 움직일 거리
+        x = 3 + self._pos * travel
+        self.cv.coords(self.knob_ring, x, 3, x + h - 6, h - 3)
+        self.cv.coords(self.knob, x + 1, 4, x + h - 7, h - 4)
         self.cv.itemconfigure(self.track, fill=lerp(self.off_color, self.on_color, self._pos))
         self.lbl.configure(fg=self.fg if self._pos > 0.5 else self.muted)
+
+
+class Dropdown(tk.Canvas):
+    """둥근 모서리 + 직접 그린 목록 팝업을 쓰는 선택 상자.
+    기본 콤보박스보다 다크 테마에 잘 맞고 항목 위에 마우스를 올리면 강조된다."""
+
+    def __init__(self, parent, variable, values, width=150, height=32, radius=9,
+                 bg="#212533", hover="#2a2f40", fg="#e6e8ef", muted="#8b90a3",
+                 accent="#ff8a3d", parent_bg=None, editable=False, max_rows=12,
+                 dis_bg="#1a1d27", dis_fg="#5f6478"):
+        super().__init__(parent, width=width, height=height, bd=0, highlightthickness=0,
+                         bg=parent_bg or parent["bg"])
+        self.var, self.values = variable, list(values)
+        self.bg, self.hover_c, self.fg, self.muted = bg, hover, fg, muted
+        self.accent, self.max_rows = accent, max_rows
+        self.dis_bg, self.dis_fg = dis_bg, dis_fg
+        self.w, self.h = width, height
+        self._enabled = True
+        self._popup = None
+        self.shape = round_rect(self, 1, 1, width - 1, height - 1, radius, fill=bg, outline="")
+        self.text = self.create_text(12, height / 2, anchor="w", fill=fg,
+                                     text=str(variable.get()), font=("Malgun Gothic", 9))
+        self.arrow = self.create_text(width - 14, height / 2, text="▾", fill=muted,
+                                      font=("Malgun Gothic", 9))
+        self.configure(cursor="hand2")
+        self.bind("<Enter>", lambda e: self._enabled and self.itemconfigure(self.shape, fill=hover))
+        self.bind("<Leave>", lambda e: self._enabled and self.itemconfigure(self.shape, fill=bg))
+        self.bind("<Button-1>", self._open)
+        variable.trace_add("write", lambda *a: self.itemconfigure(self.text, text=str(self.var.get())))
+
+    def set_enabled(self, on, disabled_bg=None, disabled_fg=None):
+        disabled_bg = disabled_bg or self.dis_bg
+        disabled_fg = disabled_fg or self.dis_fg
+        self._enabled = on
+        self.configure(cursor="hand2" if on else "arrow")
+        self.itemconfigure(self.shape, fill=self.bg if on else disabled_bg)
+        self.itemconfigure(self.text, fill=self.fg if on else disabled_fg)
+        self.itemconfigure(self.arrow, fill=self.muted if on else disabled_fg)
+
+    def _close(self, *_):
+        if self._popup is not None:
+            try:
+                self._popup.destroy()
+            except Exception:
+                pass
+            self._popup = None
+
+    def _open(self, _=None):
+        if not self._enabled:
+            return
+        if self._popup is not None:
+            self._close()
+            return
+        top = tk.Toplevel(self)
+        self._popup = top
+        top.overrideredirect(True)
+        top.configure(bg=self.accent)
+        rows = min(len(self.values), self.max_rows)
+        row_h = 26
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.h + 4
+        top.geometry(f"{self.w}x{rows * row_h + 2}+{x}+{y}")
+
+        wrap = tk.Frame(top, bg=self.bg)
+        wrap.pack(fill="both", expand=True, padx=1, pady=1)
+        canvas = tk.Canvas(wrap, bg=self.bg, bd=0, highlightthickness=0)
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas, bg=self.bg)
+        canvas.create_window(0, 0, anchor="nw", window=inner, width=self.w - 2)
+        if len(self.values) > rows:
+            sb = tk.Scrollbar(wrap, command=canvas.yview, width=8)
+            sb.pack(side="right", fill="y")
+            canvas.configure(yscrollcommand=sb.set)
+            canvas.bind_all("<MouseWheel>",
+                            lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+
+        for v in self.values:
+            lb = tk.Label(inner, text=v, bg=self.bg, fg=self.fg, anchor="w", padx=12,
+                          font=("Malgun Gothic", 9), cursor="hand2")
+            lb.pack(fill="x", ipady=3)
+            lb.bind("<Enter>", lambda e, w=lb: w.configure(bg=self.hover_c, fg=self.accent))
+            lb.bind("<Leave>", lambda e, w=lb: w.configure(bg=self.bg, fg=self.fg))
+            lb.bind("<Button-1>", lambda e, val=v: (self.var.set(val), self._close()))
+        inner.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        top.bind("<FocusOut>", self._close)
+        top.bind("<Escape>", self._close)
+        top.focus_set()
 
 
 class GradientHeader(tk.Canvas):
